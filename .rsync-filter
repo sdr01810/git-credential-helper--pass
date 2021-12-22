@@ -1,0 +1,33 @@
+- *.swp
+- .#*
+- *#
+- *~
+
+- .all.*
+- .out.*
+- .du@*
+- .sb.*
+
+- .ts.*
+
+- build-output
+- build-output[-.]*
+
+- buildroot
+- buildroot.*
+- buildroot-[0-9]*
+
+- buildroot-dl
+- buildroot-dl[-.]*
+
+- buildroot-output
+- buildroot-output[-.]*
+
+- buildroot-*.tar
+- buildroot-*.tar.*
+
+- scratch
+- scratch[-.]*
+
+- typescript
+

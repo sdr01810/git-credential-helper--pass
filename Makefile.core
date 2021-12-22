@@ -1,0 +1,478 @@
+## -*- mode:makefile -*-
+##
+## GNU makefile (core behavior).
+##
+## Supports most of the goals in the automake behavior contract.
+##
+## Adds new goals as well. See `make what` for a full list.
+##
+## Typical uses:
+##
+##     for tool_name in 'GNU Make' ; do
+##         if make --version | egrep -q -i "^${tool_name}" ; then
+##             echo You are using ${tool_name}.
+##             true
+##         else
+##             echo You are not using ${tool_name}.
+##             false
+##         fi
+##     done
+##
+##     make
+##     make default
+##
+##     make what
+##
+##     make build
+##     make clean
+##     make clobber
+##     make distclean
+##
+##     make all
+##     make build check stage dist
+##
+##     make install
+##     make install.undo
+##
+##     sudo make install DESTDIR=/opt/my-package
+##     sudo make install INSTALLATION_DIR=/opt/my-package
+##
+##     make eval command='echo ${distribution_candidates}'
+##
+## Warning:
+##
+##     The targets install and install.undo entirely replace and remove the
+##     installation directory, respectively. In other words, the installation
+##     directory is expected to be dedicated solely to this package.
+##
+
+default ::
+
+-include Makefile.core.conf
+-include Makefile.core.local
+
+##
+
+package_name ?= $(shell head -1 NAME.txt)
+
+package_version ?= $(shell head -1 VERSION.txt)
+
+package_namespace := $(strip $(shell \
+	echo "${package_name}" | sed -e 's/[^_0-9a-zA-Z]/_/g ; s/^__*// ; s/__*$$//' \
+))
+
+##
+
+ifeq (,${package_name})
+$(error Not defined: package_name)
+endif
+
+ifeq (,${package_version})
+$(error Not defined: package_version)
+endif
+
+##
+
+targets_phony += default always t
+
+targets +=
+
+default ::
+
+always :: t
+
+force =
+
+t ::
+
+##
+
+targets_phony += what
+
+what ::
+	@echo "$(targets_phony)" "$(targets)" | perl -pe 's{\s+}{$$/}g' | sort -u | sort -f
+
+##
+
+targets_phony += eval
+
+eval ::
+	@${command}
+
+##
+
+define copy_stdin # destination_file_pn
+(mkdir -p "$(dir $(1))" && \
+	cat > "$(1)")
+endef
+
+define copy_file # source_file_pn destination_file_pn
+(mkdir -p "$(dir $(2))" && \
+	cp -f "$(1)" "$(2)")
+endef
+
+define link_or_copy_file # source_file_pn destination_file_pn
+(mkdir -p "$(dir $(2))" && \
+	cp -f --link "$(1)" "$(2)")
+endef
+
+define make_directory # directory_pn
+(mkdir -p "$(dir $(1))")
+endef
+
+define remove_directory # directory_pn
+$(if $(filter-out .,$(1)),rm -rf "$(1)",rm -f .ts.*)
+endef
+
+define remove_file # file_pn
+rm -f "$(1)"
+endef
+
+define touch_file # file_pn
+(mkdir -p "$(dir $(1))" && \
+	touch "$(1)")
+endef
+
+define touch_file_unless_newer_than # ref_file_pn file_pn
+([ "$(2)" -nt "$(1)" ] || \
+	touch "$(2)")
+endef
+
+%/.ts.completed : %/.ts.created
+	@:
+	@$(call touch_file_unless_newer_than,$<,$@)
+
+%/.ts.created : $(force)
+	@:
+	@$(call touch_file,$@)
+
+##
+
+build_output_dir               ?= build-output
+build_output_artifacts_dir     ?= $(build_output_dir)/artifacts
+build_output_source_dir        ?= $(build_output_dir)/source
+build_output_staging_dir       ?= $(build_output_dir)/staging
+
+##
+
+distribution_archive_file_stem := $(strip \
+	$(package_name)-$(package_version) \
+)
+distribution_archive_file_tar_gz ?= $(strip \
+	$(build_output_dir)/$(distribution_archive_file_stem).tar.gz \
+)
+distribution_archive_files += $(strip \
+	$(distribution_archive_file_tar_gz) \
+)
+
+##
+
+distribution_candidate_top_files_and_dirs_glob ?= $(strip \
+	$(wildcard *.in *.md *.sh *.txt bin etc include lib libexec share) \
+)
+
+distribution_candidate_file_finder ?= $(strip \
+	find $(distribution_candidate_top_files_and_dirs_glob) ! -type d ! -name '.*' ! -name '*~' \
+)
+distribution_candidates ?= $(strip \
+	$(shell $(distribution_candidate_file_finder)) \
+)
+
+##
+
+distribution_candidates_as_file ?= $(strip \
+	$(build_output_dir)/$(distribution_archive_file_stem).files \
+)
+distribution_candidates_computed_once := $(distribution_candidates)
+
+##
+
+distribution_staging_dir ?= $(strip \
+	$(build_output_staging_dir)/$(distribution_archive_file_stem) \
+)
+
+##
+
+default_installation_dir := $(strip \
+	/opt/$(distribution_archive_file_stem) \
+)
+installation_dir := $(strip \
+	$(patsubst %/,%,$(or $(INSTALLATION_DIR),$(DESTDIR),$(default_installation_dir))) \
+)
+installation_dir_unversioned := $(strip \
+	$(patsubst %-$(package_version),%,$(installation_dir)) \
+)
+
+##
+
+targets_phony += build build.hook.before build.hook.during build.hook.after
+
+targets += $(build_output_dir)
+
+build :: $(build_output_dir)/.ts.completed
+
+$(build_output_dir)/.ts.completed : build.hook.after
+
+build.hook.before :: $(build_output_dir)/.ts.created
+build.hook.before :: $(MAKEFILE_LIST)
+build.hook.before :: source
+
+build.hook.during :: build.hook.before
+
+build.hook.after  :: build.hook.during
+
+default :: build
+
+##
+
+targets_phony += check
+
+check :: build
+
+##
+
+targets += $(distribution_candidates_as_file)
+
+$(distribution_candidates_as_file) : $(dir $(distribution_candidates_as_file)).ts.created
+$(distribution_candidates_as_file) : $(build_output_source_dir)/.ts.completed
+$(distribution_candidates_as_file) : $(distribution_candidates)
+	:
+	ls -d $(distribution_candidates) | sort > "$@"
+	:
+	wc -l "$@"
+
+##
+
+targets_phony += artifacts artifacts.hook.before artifacts.hook.during artifacts.hook.after
+
+targets += artifacts
+
+artifacts :: $(build_output_artifacts_dir)/.ts.completed
+
+$(build_output_artifacts_dir)/.ts.completed : artifacts.hook.after
+
+artifacts.hook.before :: $(build_output_artifacts_dir)/.ts.created
+artifacts.hook.before :: $(MAKEFILE_LIST)
+
+artifacts.hook.during :: artifacts.hook.before
+
+artifacts.hook.after  :: artifacts.hook.during
+
+generated_artifacts_excluded_from_source +=
+
+generated_artifacts_excluded_from_targets +=
+
+generated_artifacts += $(strip $(generated_artifacts_excluded_from_targets))
+
+generated_artifacts += $(strip $(generated_artifacts_excluded_from_source))
+
+generated_source += $(filter-out $(generated_artifacts_excluded_from_source),$(generated_artifacts))
+
+targets += $(filter-out $(generated_artifacts_excluded_from_targets),$(generated_artifacts))
+
+%.gz : %
+	:
+	gzip --to-stdout "$<" | cat > "$@"
+
+##
+
+targets_phony += source source.hook.before source.hook.during source.hook.after
+
+targets += $(build_output_source_dir)
+
+source :: $(build_output_source_dir)/.ts.completed
+
+$(build_output_source_dir)/.ts.completed : source.hook.after
+
+source.hook.before :: $(build_output_source_dir)/.ts.created
+source.hook.before :: $(MAKEFILE_LIST)
+source.hook.before :: artifacts
+
+source.hook.during :: source.hook.before
+
+source.hook.after  :: source.hook.during
+
+generated_source_excluded_from_targets +=
+
+generated_source += $(strip $(generated_source_excluded_from_targets))
+
+targets += $(filter-out $(generated_source_excluded_from_targets),$(generated_source))
+
+##
+
+targets += TAGS tags
+
+TAGS tags : $(distribution_candidates_as_file)
+	:
+	etags --members $$(cat "$^")
+	ctags $$(cat "$^")
+
+##
+
+targets_phony += stage
+
+targets += $(distribution_staging_dir)
+
+stage :: $(distribution_staging_dir)/.ts.completed
+
+$(distribution_staging_dir)/.ts.completed : $(distribution_candidates_as_file)
+$(distribution_staging_dir)/.ts.completed : $(distribution_candidates)
+	:
+	rm -rf "$(dir $@)"
+	:
+	cat "$(distribution_candidates_as_file)" | cpio -pdmu "$(patsubst %/,%,$(dir $@))"
+	:
+	for d1 in "$(dir $@)"bin \
+	          "$(dir $@)"bin/thunk ; do \
+	for x1 in "$${d1:?}"/*.js "$${d1:?}"/*.*sh "$${d1:?}"/*.pl \
+	          "$${d1:?}"/*.py "$${d1:?}"/*.tcl "$${d1:?}"/*.tk ; do \
+		[ -e "$${x1:?}" ] || continue ; \
+		x1_target="$$(basename "$${x1:?}")" ; \
+		case "$${x1:?}" in */*.prolog.*) continue ;; esac ; \
+		(set -x ; ln -snf "$${x1_target:?}" "$${x1%.*}") ; \
+	done;done
+	:
+	chmod -R a+rX "$(dir $@)"
+	@:
+	@$(call touch_file,$@)
+
+##
+
+targets_phony += dist
+
+targets += $(distribution_archive_files)
+
+dist :: stage
+
+dist :: $(distribution_archive_files)
+
+$(distribution_archive_file_tar_gz) : $(distribution_staging_dir)/.ts.completed
+	:
+	tar czf "$@" -C "$(dir $(distribution_staging_dir))" --exclude='.ts.*' "$(notdir $(distribution_staging_dir))"
+	:
+	ls -lh "$@"
+
+##
+
+targets_phony += install install.undo
+
+install.undo ::
+	:
+	rm -f "/etc/paths.d/$(package_name)"
+	rm -f "/etc/profile.d/$(package_name).sh"
+
+ifeq ($(notdir $(installation_dir)),$(package_name)-$(package_version))
+install.undo ::
+	:
+	! [ "$(notdir $(installation_dir))" = "$$(readlink "$(installation_dir_unversioned)" 2>/dev/null)" ] || rm -rf "$(installation_dir_unversioned)"
+	:
+	rm -rf "$(installation_dir)"
+else
+ifeq ($(notdir $(installation_dir)),$(package_name))
+install.undo ::
+	:
+	rm -rf "$(installation_dir)"
+else
+install.undo ::
+	@echo 1>&2 "Cannot remove installation safely: $(installation_dir)"
+	@false
+endif
+endif
+
+install :: stage
+
+ifneq ($(installation_dir_unversioned),$(installation_dir))
+install :: $(installation_dir_unversioned)/.ts.completed
+else
+install :: $(installation_dir)/.ts.completed
+endif
+
+ifneq ($(installation_dir_unversioned),$(installation_dir))
+$(installation_dir_unversioned)/.ts.completed : $(installation_dir)/.ts.completed
+	:
+	ln -snf "$(notdir $(installation_dir))" "$(installation_dir_unversioned)"
+endif
+
+$(installation_dir)/.ts.completed : $(distribution_staging_dir)/.ts.completed
+	:
+	rsync -a --delete --exclude='.ts.*' "$(dir $<)" "$(dir $@)"
+	:
+	for x1 in "$(dir $@)etc"/*/*.in ; do \
+		[ -e "$${x1:?}" ] || continue ; \
+		(set -x ; sed -e 's#@package_installation_dir_unversioned@#$(patsubst %/,%,$(installation_dir_unversioned))#g' "$${x1:?}" > "$${x1%.in}") ; \
+	done
+	:
+	if [ -d /etc/paths.d ] ; then \
+		(set -x ; cp "$(dir $@)etc/paths.d/$(package_name)" "/etc/paths.d/.") ; \
+	elif [ -d /etc/profile.d ] ; then \
+		(set -x ; cp "$(dir $@)etc/profile.d/$(package_name)".*.sh "/etc/profile.d/.") ; \
+	fi
+	@:
+	@$(call touch_file,$@)
+
+##
+
+targets_phony += all
+
+all :: build check stage dist
+
+##
+
+targets_phony += clean clobber distclean
+
+clean ::
+	:
+	for f1 in TAGS tags ; do $(call remove_file,$${f1:?}) ; done
+
+clean ::
+	:
+	for f1 in $(distribution_candidates_as_file) ; do $(call remove_file,$${f1:?}) ; done
+
+clean ::
+	:
+	for f1 in $(distribution_archive_files) ; do $(call remove_file,$${f1:?}) ; done
+
+clean ::
+	:
+	for f1 in $(generated_source) ; do $(call remove_file,$${f1:?}) ; done
+
+clobber :: clean
+
+clobber ::
+	:
+	$(call remove_directory,$(distribution_staging_dir))
+
+clobber ::
+	:
+	$(call remove_directory,$(build_output_staging_dir))
+
+clobber ::
+	:
+	$(call remove_directory,$(build_output_source_dir))
+
+distclean :: clobber
+
+distclean ::
+	:
+	$(call remove_directory,$(build_output_artifacts_dir))
+
+distclean ::
+	:
+	$(call remove_directory,$(build_output_dir))
+
+##
+
+% : %.sh ; # do nothing; overrides default rule
+
+##
+
+artifacts.hook.during :: $(generated_artifacts)
+
+source.hook.during :: $(generated_source)
+
+.PHONY : $(targets_phony) # must be last
+
+#^-- must be after corresponding variables are populated 
+
+## EOF
+
